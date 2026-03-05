@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Data directories (user content, not tracked)
+data/papers/*.pdf
+data/cache/
+data/output/*.csv
+data/variants/variants.json
+
+# Keep directory structure
+!data/papers/.gitkeep
+!data/variants/.gitkeep
+!data/output/.gitkeep
+!data/cache/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/
+
+# Misc
+*.log
