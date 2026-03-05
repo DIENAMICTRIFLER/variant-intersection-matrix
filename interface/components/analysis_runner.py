@@ -21,13 +21,14 @@ from core.text_extraction import TextExtractor
 from core.preprocessing import TextPreprocessor
 from core.variant_detection import VariantDetector
 from core.matrix_computation import MatrixComputer
+from interface.design import section_header, sub_header, icon
 
 logger = logging.getLogger(__name__)
 
 
 def render_analysis_runner():
     """Render the Analysis Runner section of the UI."""
-    st.header("⚙️ Run Analysis")
+    st.markdown(section_header("settings", "Run Analysis"), unsafe_allow_html=True)
 
     # Pre-check: are papers and variants ready?
     papers = list(PAPERS_DIR.glob("*.pdf"))
@@ -51,7 +52,7 @@ def render_analysis_runner():
 
     # ── Run Button ───────────────────────────────────────────────────
     if st.button(
-        "🚀 Run Full Analysis",
+        "Run Full Analysis",
         type="primary",
         disabled=not can_run,
         use_container_width=True,
@@ -82,7 +83,7 @@ def _run_full_pipeline(variants):
             )
 
         raw_texts = extractor.extract_all(progress_callback=extraction_progress)
-        progress_bar.progress(1.0, text="✅ Extraction complete")
+        progress_bar.progress(1.0, text="Extraction complete")
 
         if not raw_texts:
             st.error("No text could be extracted from the uploaded papers.")
@@ -113,7 +114,7 @@ def _run_full_pipeline(variants):
             preprocessed,
             progress_callback=detection_progress,
         )
-        progress_bar2.progress(1.0, text="✅ Detection complete")
+        progress_bar2.progress(1.0, text="Detection complete")
         status.write(f"  → Scanned {len(detection_results)} papers × {len(variants)} variants")
 
         # ── Step 4: Matrix Computation ───────────────────────────────
@@ -139,18 +140,18 @@ def _run_full_pipeline(variants):
         st.session_state.variant_detector = detector
         st.session_state.analysis_complete = True
 
-        status.update(label="✅ Analysis complete!", state="complete")
+        status.update(label="Analysis complete!", state="complete")
         st.balloons()
 
     except Exception as e:
         logger.exception("Analysis pipeline failed")
-        status.update(label="❌ Analysis failed", state="error")
+        status.update(label="Analysis failed", state="error")
         st.error(f"An error occurred: {str(e)}")
 
 
 def _show_results_summary():
     """Display summary statistics from the last analysis run."""
-    st.subheader("📊 Results Summary")
+    st.markdown(sub_header("bar_chart", "Results Summary"), unsafe_allow_html=True)
 
     computer: MatrixComputer = st.session_state.matrix_computer
     stats = computer.get_summary_stats()
@@ -169,7 +170,7 @@ def _show_results_summary():
 
     # Download buttons for output files
     st.divider()
-    st.subheader("📥 Download Results")
+    st.markdown(sub_header("download", "Download Results"), unsafe_allow_html=True)
 
     output_files = list(OUTPUT_DIR.glob("*.csv"))
     if output_files:
@@ -179,7 +180,7 @@ def _show_results_summary():
                 with open(file_path, "r") as f:
                     csv_data = f.read()
                 st.download_button(
-                    label=f"📄 {file_path.name}",
+                    label=file_path.name,
                     data=csv_data,
                     file_name=file_path.name,
                     mime="text/csv",

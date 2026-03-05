@@ -19,11 +19,12 @@ from typing import List, Optional, Tuple
 
 from config.settings import HEATMAP_COLORSCALE, HEATMAP_ZERO_COLOR
 from core.matrix_computation import MatrixComputer
+from interface.design import section_header, sub_header, icon, COLORS
 
 
 def render_matrix_viewer():
     """Render the interactive matrix viewer."""
-    st.header("📊 Matrix Viewer")
+    st.markdown(section_header("grid_view", "Matrix Viewer"), unsafe_allow_html=True)
 
     if not st.session_state.get("analysis_complete", False):
         st.info("Run the analysis first to view matrices.")
@@ -35,10 +36,10 @@ def render_matrix_viewer():
 
     # ── Tabs ─────────────────────────────────────────────────────────
     tab_intersection, tab_paper_variant, tab_gaps, tab_validation = st.tabs([
-        "🔗 Intersection Matrix",
-        "📋 Paper × Variant Matrix",
-        "🕳️ Research Gaps",
-        "✏️ Manual Validation",
+        "Intersection Matrix",
+        "Paper × Variant Matrix",
+        "Research Gaps",
+        "Manual Validation",
     ])
 
     with tab_intersection:
@@ -60,11 +61,11 @@ def render_matrix_viewer():
 
 def _render_intersection_matrix(intersection_df: pd.DataFrame, computer: MatrixComputer):
     """Render the Variant × Variant intersection matrix as an interactive heatmap."""
-    st.subheader("Variant × Variant Intersection Matrix")
+    st.markdown(sub_header("link", "Variant × Variant Intersection Matrix"), unsafe_allow_html=True)
     st.caption(
         "Each cell shows how many papers discuss **both** variants. "
         "Diagonal = total papers for that variant. "
-        "Click a cell to see supporting papers."
+        "Select a pair below to see supporting papers."
     )
 
     # Create heatmap
@@ -73,7 +74,7 @@ def _render_intersection_matrix(intersection_df: pd.DataFrame, computer: MatrixC
 
     # ── Cell Drill-Down ──────────────────────────────────────────────
     st.divider()
-    st.subheader("🔍 Drill Down into a Pair")
+    st.markdown(sub_header("search", "Drill Down into a Pair"), unsafe_allow_html=True)
 
     variant_names = list(intersection_df.columns)
     col1, col2 = st.columns(2)
@@ -97,7 +98,7 @@ def _render_intersection_matrix(intersection_df: pd.DataFrame, computer: MatrixC
                 )
             else:
                 st.warning(
-                    f"🕳️ **Research Gap:** No papers discuss both **{va}** and **{vb}**."
+                    f"**Research Gap:** No papers discuss both **{va}** and **{vb}**."
                 )
 
         if papers:
@@ -133,11 +134,12 @@ def _create_intersection_heatmap(df: pd.DataFrame) -> go.Figure:
         colorbar=dict(title="Count"),
         text=values.astype(int).astype(str),
         texttemplate="%{text}",
-        textfont=dict(size=9),
+        textfont=dict(size=9, color=COLORS["text"]),
     ))
 
     fig.update_layout(
         height=max(600, len(labels) * 18),
+        font=dict(family="Inter, sans-serif"),
         xaxis=dict(
             tickangle=45,
             side="bottom",
@@ -148,6 +150,8 @@ def _create_intersection_heatmap(df: pd.DataFrame) -> go.Figure:
             tickfont=dict(size=9),
         ),
         margin=dict(l=10, r=10, t=30, b=10),
+        plot_bgcolor=COLORS["surface"],
+        paper_bgcolor=COLORS["white"],
     )
 
     return fig
@@ -159,7 +163,7 @@ def _create_intersection_heatmap(df: pd.DataFrame) -> go.Figure:
 
 def _render_paper_variant_matrix(df: pd.DataFrame):
     """Render the Paper × Variant binary matrix."""
-    st.subheader("Paper × Variant Binary Matrix")
+    st.markdown(sub_header("table_chart", "Paper × Variant Binary Matrix"), unsafe_allow_html=True)
     st.caption("1 = variant detected in paper, 0 = not detected.")
 
     # Stats per variant (column sums)
@@ -173,15 +177,18 @@ def _render_paper_variant_matrix(df: pd.DataFrame):
             z=df.values,
             x=list(df.columns),
             y=list(df.index),
-            colorscale=[[0, "#f5f5f5"], [1, "#2196F3"]],
+            colorscale=[[0, COLORS["surface"]], [1, COLORS["secondary"]]],
             showscale=False,
             hovertemplate="Paper: %{y}<br>Variant: %{x}<br>Present: %{z}<extra></extra>",
         ))
         fig.update_layout(
             height=max(400, len(df) * 16),
+            font=dict(family="Inter, sans-serif"),
             xaxis=dict(tickangle=45, tickfont=dict(size=8)),
             yaxis=dict(tickfont=dict(size=8), autorange="reversed"),
             margin=dict(l=10, r=10, t=10, b=10),
+            plot_bgcolor=COLORS["white"],
+            paper_bgcolor=COLORS["white"],
         )
         st.plotly_chart(fig, use_container_width=True, key="paper_variant_heatmap")
 
@@ -192,7 +199,7 @@ def _render_paper_variant_matrix(df: pd.DataFrame):
             st.progress(pct / 100, text=f"{variant_name}: {int(count)} ({pct:.0f}%)")
 
     # Expandable raw data table
-    with st.expander("📊 View Raw Data Table"):
+    with st.expander("View Raw Data Table"):
         st.dataframe(df, use_container_width=True, height=400)
 
 
@@ -202,7 +209,7 @@ def _render_paper_variant_matrix(df: pd.DataFrame):
 
 def _render_research_gaps(computer: MatrixComputer):
     """Show variant pairs with zero intersection (research gaps)."""
-    st.subheader("🕳️ Research Gaps")
+    st.markdown(sub_header("psychology", "Research Gaps"), unsafe_allow_html=True)
     st.caption(
         "These variant pairs have **no** papers that discuss both variants. "
         "They represent potential research opportunities."
@@ -211,7 +218,7 @@ def _render_research_gaps(computer: MatrixComputer):
     gaps = computer.get_research_gaps()
 
     if not gaps:
-        st.success("🎉 No research gaps found — all variant pairs are covered!")
+        st.success("No research gaps found — all variant pairs are covered!")
         return
 
     st.metric("Total Research Gaps", len(gaps))
@@ -242,7 +249,7 @@ def _render_research_gaps(computer: MatrixComputer):
     # Download gaps
     csv = gap_df.to_csv()
     st.download_button(
-        "📥 Download Research Gaps CSV",
+        "Download Research Gaps CSV",
         data=csv,
         file_name="research_gaps.csv",
         mime="text/csv",
@@ -255,7 +262,7 @@ def _render_research_gaps(computer: MatrixComputer):
 
 def _render_manual_validation(df: pd.DataFrame, computer: MatrixComputer):
     """Allow manual override of variant detection results."""
-    st.subheader("✏️ Manual Validation")
+    st.markdown(sub_header("tune", "Manual Validation"), unsafe_allow_html=True)
     st.caption(
         "Override automatic detection results. "
         "Changes will be applied when you re-run the analysis."
@@ -272,7 +279,16 @@ def _render_manual_validation(df: pd.DataFrame, computer: MatrixComputer):
 
     if selected_paper and selected_variant:
         current_value = bool(df.at[selected_paper, selected_variant])
-        st.write(f"Current detection: **{'✅ Present' if current_value else '❌ Not present'}**")
+        if current_value:
+            st.markdown(
+                f'Current detection: {icon("check_circle", size=16, color=COLORS["success"])} **Present**',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f'Current detection: {icon("cancel", size=16, color=COLORS["error"])} **Not present**',
+                unsafe_allow_html=True,
+            )
 
         new_value = st.toggle(
             "Variant is present in this paper",
@@ -281,7 +297,7 @@ def _render_manual_validation(df: pd.DataFrame, computer: MatrixComputer):
         )
 
         if new_value != current_value:
-            if st.button("💾 Save Override", type="primary"):
+            if st.button("Save Override", type="primary"):
                 computer.set_override(selected_paper, selected_variant, new_value)
                 st.success(
                     f"Override saved: {selected_paper} × {selected_variant} "
@@ -293,7 +309,7 @@ def _render_manual_validation(df: pd.DataFrame, computer: MatrixComputer):
     st.divider()
     overrides = computer.get_overrides()
     if overrides:
-        st.subheader("Current Overrides")
+        st.markdown(sub_header("list", "Current Overrides"), unsafe_allow_html=True)
         override_rows = []
         for pid, vars_dict in overrides.items():
             for var_name, val in vars_dict.items():
@@ -305,7 +321,7 @@ def _render_manual_validation(df: pd.DataFrame, computer: MatrixComputer):
         override_df = pd.DataFrame(override_rows)
         st.dataframe(override_df, use_container_width=True)
 
-        if st.button("🗑️ Clear All Overrides"):
+        if st.button("Clear All Overrides"):
             from config.settings import MANUAL_OVERRIDES_FILE
             from utils.helpers import save_json
             save_json({}, MANUAL_OVERRIDES_FILE)

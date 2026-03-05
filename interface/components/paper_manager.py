@@ -14,14 +14,15 @@ from typing import List
 
 from config.settings import PAPERS_DIR, MAX_UPLOAD_SIZE_MB
 from utils.helpers import format_file_size, get_paper_id
+from interface.design import section_header, sub_header, icon
 
 
 def render_paper_manager():
     """Render the Paper Management section of the UI."""
-    st.header("📄 Paper Management")
+    st.markdown(section_header("description", "Paper Management"), unsafe_allow_html=True)
 
     # ── Upload Section ───────────────────────────────────────────────
-    st.subheader("Upload Papers")
+    st.markdown(sub_header("cloud_upload", "Upload Papers"), unsafe_allow_html=True)
     uploaded_files = st.file_uploader(
         "Upload PDF research papers",
         type=["pdf"],
@@ -36,7 +37,7 @@ def render_paper_manager():
     st.divider()
 
     # ── Paper Library ────────────────────────────────────────────────
-    st.subheader("Paper Library")
+    st.markdown(sub_header("layers", "Paper Library"), unsafe_allow_html=True)
     papers = _list_papers()
 
     if not papers:
@@ -58,7 +59,7 @@ def render_paper_manager():
     st.divider()
     col1, col2 = st.columns([1, 3])
     with col1:
-        if st.button("🗑️ Delete All Papers", type="secondary"):
+        if st.button("Delete All Papers", type="secondary"):
             st.session_state["confirm_delete_all"] = True
 
     if st.session_state.get("confirm_delete_all", False):
@@ -92,9 +93,9 @@ def _handle_uploads(uploaded_files) -> None:
         saved_count += 1
 
     if saved_count > 0:
-        st.success(f"✅ Uploaded {saved_count} paper(s) successfully.")
+        st.success(f"Uploaded {saved_count} paper(s) successfully.")
     if skipped_count > 0:
-        st.info(f"ℹ️ Skipped {skipped_count} paper(s) — already exist.")
+        st.info(f"Skipped {skipped_count} paper(s) — already exist.")
 
 
 def _list_papers() -> List[Path]:
@@ -109,11 +110,14 @@ def _render_paper_row(paper_path: Path) -> None:
 
     col1, col2, col3 = st.columns([5, 2, 1])
     with col1:
-        st.text(f"📑 {paper_path.name}")
+        st.markdown(
+            f'{icon("file_present", size=16, color="#3B82B0")} {paper_path.name}',
+            unsafe_allow_html=True,
+        )
     with col2:
         st.text(file_size)
     with col3:
-        if st.button("🗑️", key=f"del_{paper_id}", help=f"Delete {paper_path.name}"):
+        if st.button("Delete", key=f"del_{paper_id}", help=f"Delete {paper_path.name}"):
             paper_path.unlink()
             st.rerun()
 

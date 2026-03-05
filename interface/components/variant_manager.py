@@ -17,11 +17,12 @@ from typing import Any, Dict, List, Optional
 
 from config.settings import VARIANTS_FILE
 from utils.helpers import load_json, save_json
+from interface.design import section_header, sub_header, icon
 
 
 def render_variant_manager():
     """Render the Variant Management section of the UI."""
-    st.header("🧬 Variant & Synonym Manager")
+    st.markdown(section_header("biotech", "Variant & Synonym Manager"), unsafe_allow_html=True)
 
     # Initialize session state for variants
     if "variants" not in st.session_state:
@@ -29,9 +30,9 @@ def render_variant_manager():
 
     # ── Tabs ─────────────────────────────────────────────────────────
     tab_manage, tab_add, tab_import = st.tabs([
-        "📋 Manage Variants",
-        "➕ Add Variant",
-        "📥 Import / Export",
+        "Manage Variants",
+        "Add Variant",
+        "Import / Export",
     ])
 
     with tab_manage:
@@ -60,7 +61,7 @@ def _render_variant_list():
 
     # Search filter
     search = st.text_input(
-        "🔍 Search variants",
+        "Search variants",
         placeholder="Type to filter variants...",
         key="variant_search",
     )
@@ -104,11 +105,11 @@ def _render_variant_card(variant: Dict[str, Any], idx: int):
             else:
                 st.caption("_No synonyms defined_")
         with col2:
-            if st.button("✏️", key=f"edit_{name}_{idx}", help="Edit variant"):
+            if st.button("Edit", key=f"edit_{name}_{idx}", help="Edit variant"):
                 st.session_state[edit_key] = True
                 st.rerun()
         with col3:
-            if st.button("🗑️", key=f"del_{name}_{idx}", help="Delete variant"):
+            if st.button("Delete", key=f"del_{name}_{idx}", help="Delete variant"):
                 st.session_state.variants = [
                     v for v in st.session_state.variants if v["name"] != name
                 ]
@@ -139,7 +140,7 @@ def _render_edit_form(variant: Dict[str, Any], idx: int):
 
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("💾 Save", key=f"save_{name}_{idx}"):
+            if st.button("Save", key=f"save_{name}_{idx}"):
                 parsed_synonyms = [
                     s.strip() for s in new_synonyms.split("\n") if s.strip()
                 ]
@@ -153,7 +154,7 @@ def _render_edit_form(variant: Dict[str, Any], idx: int):
                 st.session_state[edit_key] = False
                 st.rerun()
         with col2:
-            if st.button("❌ Cancel", key=f"cancel_{name}_{idx}"):
+            if st.button("Cancel", key=f"cancel_{name}_{idx}"):
                 st.session_state[edit_key] = False
                 st.rerun()
         st.divider()
@@ -162,7 +163,7 @@ def _render_edit_form(variant: Dict[str, Any], idx: int):
 def _render_add_variant_form():
     """Render the form for adding a new variant."""
     with st.form("add_variant_form", clear_on_submit=True):
-        st.subheader("Add New Variant")
+        st.markdown(sub_header("add", "Add New Variant"), unsafe_allow_html=True)
 
         name = st.text_input(
             "Variant Name *",
@@ -176,7 +177,7 @@ def _render_add_variant_form():
             height=150,
         )
 
-        submitted = st.form_submit_button("➕ Add Variant", type="primary")
+        submitted = st.form_submit_button("Add Variant", type="primary")
 
         if submitted:
             if not name or not name.strip():
@@ -199,12 +200,12 @@ def _render_add_variant_form():
             }
             st.session_state.variants.append(new_variant)
             _save_variants()
-            st.success(f"✅ Added variant '{clean_name}' with {len(synonyms)} synonym(s).")
+            st.success(f"Added variant '{clean_name}' with {len(synonyms)} synonym(s).")
 
 
 def _render_import_export():
     """Render import/export functionality."""
-    st.subheader("Export Variants")
+    st.markdown(sub_header("cloud_download", "Export Variants"), unsafe_allow_html=True)
     if st.session_state.variants:
         export_data = json.dumps(
             {"variants": st.session_state.variants},
@@ -212,7 +213,7 @@ def _render_import_export():
             ensure_ascii=False,
         )
         st.download_button(
-            label="📥 Download variants.json",
+            label="Download variants.json",
             data=export_data,
             file_name="variants.json",
             mime="application/json",
@@ -226,7 +227,7 @@ def _render_import_export():
 
     st.divider()
 
-    st.subheader("Import Variants")
+    st.markdown(sub_header("upload_file", "Import Variants"), unsafe_allow_html=True)
     uploaded = st.file_uploader(
         "Upload a variants JSON file",
         type=["json"],
@@ -259,7 +260,7 @@ def _render_import_export():
                 key="import_mode",
             )
 
-            if st.button("📥 Import", type="primary"):
+            if st.button("Import", type="primary"):
                 if import_mode == "Replace all":
                     st.session_state.variants = imported_variants
                 else:
@@ -273,7 +274,7 @@ def _render_import_export():
                             f"Skipped {len(imported_variants) - len(new_variants)} duplicate(s).")
 
                 _save_variants()
-                st.success(f"✅ Imported {len(imported_variants)} variant(s).")
+                st.success(f"Imported {len(imported_variants)} variant(s).")
                 st.rerun()
 
         except json.JSONDecodeError:

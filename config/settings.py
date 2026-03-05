@@ -55,12 +55,12 @@ CASE_INSENSITIVE = True
 # ─── Streamlit Interface ────────────────────────────────────────────────────
 # Page configuration
 PAGE_TITLE = "Variant Intersection Matrix Analyzer"
-PAGE_ICON = "🔬"
+PAGE_ICON = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'><rect width='36' height='36' rx='8' fill='%231B2A4A'/><text x='18' y='26' text-anchor='middle' font-size='22' fill='white'>V</text></svg>"
 PAGE_LAYOUT = "wide"
 
 # Matrix heatmap color scale
-HEATMAP_COLORSCALE = "YlOrRd"
-HEATMAP_ZERO_COLOR = "#f0f0f0"
+HEATMAP_COLORSCALE = [[0, "#EEF1F6"], [0.25, "#93C5E8"], [0.5, "#3B82B0"], [0.75, "#2C4470"], [1, "#1B2A4A"]]
+HEATMAP_ZERO_COLOR = "#F7F8FA"
 
 # Maximum file upload size in MB
 MAX_UPLOAD_SIZE_MB = 200

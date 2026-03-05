@@ -18,6 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config.settings import PAGE_TITLE, PAGE_ICON, PAGE_LAYOUT
+from interface.design import get_theme_css, icon, section_header, status_badge, COLORS
 from interface.components.paper_manager import render_paper_manager, get_paper_count
 from interface.components.variant_manager import render_variant_manager, get_variant_count
 from interface.components.analysis_runner import render_analysis_runner
@@ -41,44 +42,8 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Custom CSS ───────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-    /* Main container width */
-    .block-container {
-        max-width: 1200px;
-        padding-top: 1rem;
-    }
-
-    /* Metric card styling */
-    [data-testid="stMetric"] {
-        background-color: #f8f9fa;
-        border-radius: 8px;
-        padding: 12px 16px;
-        border: 1px solid #e9ecef;
-    }
-
-    /* Sidebar styling */
-    [data-testid="stSidebar"] {
-        background-color: #f8f9fa;
-    }
-
-    /* Header styling */
-    h1 {
-        color: #1a237e;
-    }
-    h2 {
-        color: #283593;
-        border-bottom: 2px solid #e8eaf6;
-        padding-bottom: 8px;
-    }
-
-    /* Divider */
-    hr {
-        border-color: #e8eaf6;
-    }
-</style>
-""", unsafe_allow_html=True)
+# ── Inject Design System ─────────────────────────────────────────────────
+st.markdown(get_theme_css(), unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -86,7 +51,13 @@ st.markdown("""
 # ═══════════════════════════════════════════════════════════════════════════
 
 with st.sidebar:
-    st.title(f"{PAGE_ICON} VIM Analyzer")
+    st.markdown(
+        f'<h2 style="display:flex;align-items:center;gap:10px;border:none;padding-bottom:0;margin-bottom:0">'
+        f'{icon("science", size=26, color="#FFFFFF")}'
+        f'<span style="color:#FFFFFF;font-weight:700">VIM Analyzer</span>'
+        f'</h2>',
+        unsafe_allow_html=True,
+    )
     st.caption("Variant Intersection Matrix")
     st.divider()
 
@@ -94,10 +65,10 @@ with st.sidebar:
     page = st.radio(
         "Navigation",
         [
-            "📄 Papers",
-            "🧬 Variants",
-            "⚙️ Run Analysis",
-            "📊 View Results",
+            "Papers",
+            "Variants",
+            "Run Analysis",
+            "View Results",
         ],
         label_visibility="collapsed",
     )
@@ -105,14 +76,36 @@ with st.sidebar:
     st.divider()
 
     # Status indicators
-    st.markdown("### System Status")
+    st.markdown(
+        f'<h3 style="display:flex;align-items:center;gap:8px;margin-bottom:12px">'
+        f'{icon("dashboard", size=20, color="#E2E8F0")}'
+        f'<span style="color:#FFFFFF">System Status</span></h3>',
+        unsafe_allow_html=True,
+    )
+
     paper_count = get_paper_count()
     variant_count = get_variant_count()
     analysis_done = st.session_state.get("analysis_complete", False)
 
-    st.markdown(f"- Papers: **{paper_count}**")
-    st.markdown(f"- Variants: **{variant_count}**")
-    st.markdown(f"- Analysis: **{'✅ Complete' if analysis_done else '⏳ Pending'}**")
+    status_items = [
+        ("description", "Papers", str(paper_count)),
+        ("biotech", "Variants", str(variant_count)),
+        (
+            "check_circle" if analysis_done else "sync",
+            "Analysis",
+            "Complete" if analysis_done else "Pending",
+        ),
+    ]
+
+    for ico, label, value in status_items:
+        st.markdown(
+            f'<div class="vim-status-row">'
+            f'{icon(ico, size=16, color="#94A3B8")}'
+            f'<span class="vim-status-label">{label}:</span>'
+            f'<span class="vim-status-value">{value}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
     st.divider()
     st.caption("Built for research paper analysis")
@@ -124,17 +117,23 @@ with st.sidebar:
 # ═══════════════════════════════════════════════════════════════════════════
 
 # Title
-st.title(f"{PAGE_ICON} {PAGE_TITLE}")
+st.markdown(
+    f'<h1 style="display:flex;align-items:center;gap:12px;margin-bottom:1rem">'
+    f'{icon("science", size=34, color=COLORS["secondary"])}'
+    f'{PAGE_TITLE}'
+    f'</h1>',
+    unsafe_allow_html=True,
+)
 
 # Route to selected page
-if page == "📄 Papers":
+if page == "Papers":
     render_paper_manager()
 
-elif page == "🧬 Variants":
+elif page == "Variants":
     render_variant_manager()
 
-elif page == "⚙️ Run Analysis":
+elif page == "Run Analysis":
     render_analysis_runner()
 
-elif page == "📊 View Results":
+elif page == "View Results":
     render_matrix_viewer()
