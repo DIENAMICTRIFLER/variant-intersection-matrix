@@ -4,6 +4,9 @@ Variant Intersection Matrix Analyzer — Streamlit Application
 
 Main application entry point. Configures the page, sets up navigation,
 and delegates rendering to the component modules.
+
+Navigation is flexible — users can jump to any step at any time via
+the sidebar radio buttons.  No rigid ordering is enforced.
 """
 
 import sys
@@ -20,7 +23,11 @@ if str(PROJECT_ROOT) not in sys.path:
 from config.settings import PAGE_TITLE, PAGE_ICON, PAGE_LAYOUT
 from interface.design import get_theme_css, icon, section_header, status_badge, COLORS
 from interface.components.paper_manager import render_paper_manager, get_paper_count
-from interface.components.variant_manager import render_variant_manager, get_variant_count
+from interface.components.variant_manager import (
+    render_variant_manager,
+    get_variant_count,
+    get_dimension_count,
+)
 from interface.components.analysis_runner import render_analysis_runner
 from interface.components.matrix_viewer import render_matrix_viewer
 
@@ -61,7 +68,7 @@ with st.sidebar:
     st.caption("Variant Intersection Matrix")
     st.divider()
 
-    # Navigation
+    # Navigation — flexible ordering, no strict sequence enforced
     page = st.radio(
         "Navigation",
         [
@@ -85,10 +92,12 @@ with st.sidebar:
 
     paper_count = get_paper_count()
     variant_count = get_variant_count()
+    dimension_count = get_dimension_count()
     analysis_done = st.session_state.get("analysis_complete", False)
 
     status_items = [
         ("description", "Papers", str(paper_count)),
+        ("category", "Dimensions", str(dimension_count)),
         ("biotech", "Variants", str(variant_count)),
         (
             "check_circle" if analysis_done else "sync",
@@ -125,7 +134,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Route to selected page
+# Route to selected page — flexible navigation, any order
 if page == "Papers":
     render_paper_manager()
 

@@ -2,18 +2,25 @@
 Text Extraction Module
 ======================
 
-Extracts raw text content from PDF files using pdfplumber.
+Extracts raw text content from research paper files.
+
+Supported formats:
+    • PDF  — extracted page-by-page using pdfplumber
+    • TXT  — read directly via Python open()
 
 Key design decisions:
+    • Paper IDs are sequential (P1, P2, P3, ...) based on alphabetical
+      file ordering.  This makes references short, stable, and human-readable.
     • Batch processing to limit memory usage with large paper sets.
-    • Per-page extraction with optional page limit.
-    • Caching of extracted text to avoid re-reading PDFs.
-    • Structured return format: {paper_id: full_text}.
+    • Per-page extraction with optional page limit (PDFs only).
+    • Caching of extracted text, keyed by file content hash, so re-runs
+      skip unchanged papers.
+    • Structured return: {paper_id: full_text}.
 """
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import pdfplumber
 
@@ -23,20 +30,27 @@ from config.settings import (
     PDF_BATCH_SIZE,
     MAX_PAGES_PER_PAPER,
 )
-from utils.helpers import get_paper_id, save_json, load_json, compute_file_hash
+from utils.helpers import (
+    generate_paper_id_map,
+    save_json,
+    load_json,
+    compute_file_hash,
+    get_paper_id,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class TextExtractor:
     """
-    Handles PDF-to-text extraction with caching and batch support.
+    Handles text extraction from PDFs and TXT files with caching.
 
     Attributes:
-        papers_dir: Directory containing PDF files.
+        papers_dir: Directory containing paper files (PDF, TXT).
         cache_dir:  Directory for caching extracted text.
-        batch_size: Number of PDFs to process in each batch.
-        max_pages:  Maximum pages to extract per paper (None = all).
+        batch_size: Number of papers to process in each batch.
+        max_pages:  Maximum pages per PDF (None = all).
+        paper_id_map: Mapping of P-IDs to file paths, computed on init.
     """
 
     def __init__(
@@ -52,14 +66,17 @@ class TextExtractor:
         self.max_pages = max_pages
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
+        # Build the P1/P2/P3 mapping from sorted files
+        self.paper_id_map: Dict[str, Path] = generate_paper_id_map(self.papers_dir)
+
     # ── Public API ───────────────────────────────────────────────────────
 
     def extract_all(
         self,
-        progress_callback=None,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> Dict[str, str]:
         """
-        Extract text from every PDF in papers_dir.
+        Extract text from every paper file in papers_dir.
 
         Uses cached results when the file hash has not changed.
 
@@ -67,23 +84,25 @@ class TextExtractor:
             progress_callback: Optional callable(current, total) for UI progress.
 
         Returns:
-            Dictionary mapping paper_id → full extracted text.
+            Ordered dictionary mapping paper_id (P1, P2, ...) → full text.
         """
-        pdf_files = self._list_pdfs()
-        total = len(pdf_files)
+        total = len(self.paper_id_map)
         if total == 0:
-            logger.warning("No PDF files found in %s", self.papers_dir)
+            logger.warning("No paper files found in %s", self.papers_dir)
             return {}
 
-        logger.info("Extracting text from %d papers (batch_size=%d)", total, self.batch_size)
+        logger.info(
+            "Extracting text from %d papers (batch_size=%d)", total, self.batch_size
+        )
 
         results: Dict[str, str] = {}
-        for batch_idx in range(0, total, self.batch_size):
-            batch = pdf_files[batch_idx : batch_idx + self.batch_size]
-            for i, pdf_path in enumerate(batch):
-                global_idx = batch_idx + i
-                paper_id = get_paper_id(pdf_path.name)
-                text = self._extract_with_cache(pdf_path, paper_id)
+        items = list(self.paper_id_map.items())
+
+        for batch_start in range(0, total, self.batch_size):
+            batch = items[batch_start : batch_start + self.batch_size]
+            for i, (paper_id, file_path) in enumerate(batch):
+                global_idx = batch_start + i
+                text = self._extract_with_cache(file_path, paper_id)
                 results[paper_id] = text
 
                 if progress_callback:
@@ -92,55 +111,77 @@ class TextExtractor:
         logger.info("Extraction complete: %d papers processed", len(results))
         return results
 
-    def extract_single(self, pdf_path: Path) -> Tuple[str, str]:
+    def get_id_to_filename_map(self) -> Dict[str, str]:
         """
-        Extract text from a single PDF file.
+        Return a mapping of paper IDs to original filenames.
 
-        Args:
-            pdf_path: Path to the PDF.
+        Useful for the UI to show "P1 → paper_name.pdf" lookups.
 
         Returns:
-            Tuple of (paper_id, extracted_text).
+            Dict mapping P-ID → filename string.
         """
-        paper_id = get_paper_id(pdf_path.name)
-        text = self._extract_pdf(pdf_path)
-        return paper_id, text
+        return {pid: fpath.name for pid, fpath in self.paper_id_map.items()}
 
     # ── Internal Methods ─────────────────────────────────────────────────
 
-    def _list_pdfs(self) -> List[Path]:
-        """Return sorted list of PDF files in papers_dir."""
-        return sorted(self.papers_dir.glob("*.pdf"))
-
-    def _extract_with_cache(self, pdf_path: Path, paper_id: str) -> str:
+    def _extract_with_cache(self, file_path: Path, paper_id: str) -> str:
         """
         Return extracted text, using cached version if the file hasn't changed.
+
+        Cache key is the file's content hash (MD5).  If the hash matches
+        a previous extraction, we return the cached text immediately.
         """
-        cache_file = self.cache_dir / f"{paper_id}.json"
-        file_hash = compute_file_hash(pdf_path)
+        # Use the LEGACY paper ID (filename-based) as cache key so file renames
+        # don't invalidate cache unnecessarily.
+        cache_key = get_paper_id(file_path.name)
+        cache_file = self.cache_dir / f"{cache_key}.json"
+        file_hash = compute_file_hash(file_path)
 
         # Check cache validity
         if cache_file.exists():
             try:
                 cached = load_json(cache_file)
                 if cached.get("hash") == file_hash:
-                    logger.debug("Cache hit for %s", paper_id)
+                    logger.debug("Cache hit for %s (%s)", paper_id, file_path.name)
                     return cached["text"]
             except Exception:
                 pass  # Cache corrupt — re-extract
 
-        # Extract fresh
-        text = self._extract_pdf(pdf_path)
+        # Extract fresh based on file extension
+        text = self._extract_file(file_path)
 
         # Save to cache
         save_json({"hash": file_hash, "text": text}, cache_file)
-        logger.debug("Cached extraction for %s", paper_id)
+        logger.debug("Cached extraction for %s (%s)", paper_id, file_path.name)
 
         return text
+
+    def _extract_file(self, file_path: Path) -> str:
+        """
+        Extract text from a file, dispatching to the correct method
+        based on file extension.
+
+        Args:
+            file_path: Path to the paper file.
+
+        Returns:
+            Full extracted text.
+        """
+        ext = file_path.suffix.lower()
+        if ext == ".pdf":
+            return self._extract_pdf(file_path)
+        elif ext == ".txt":
+            return self._extract_txt(file_path)
+        else:
+            logger.warning("Unsupported file type: %s", ext)
+            return ""
 
     def _extract_pdf(self, pdf_path: Path) -> str:
         """
         Extract text from a PDF file using pdfplumber.
+
+        Concatenates text from each page, separated by newlines.
+        Respects the max_pages limit if configured.
 
         Args:
             pdf_path: Path to the PDF file.
@@ -157,7 +198,28 @@ class TextExtractor:
                     if text:
                         pages_text.append(text)
         except Exception as e:
-            logger.error("Failed to extract %s: %s", pdf_path.name, e)
+            logger.error("Failed to extract PDF %s: %s", pdf_path.name, e)
             return ""
 
         return "\n".join(pages_text)
+
+    def _extract_txt(self, txt_path: Path) -> str:
+        """
+        Read text from a plain TXT file.
+
+        Attempts UTF-8 encoding first, falls back to latin-1 if that fails.
+
+        Args:
+            txt_path: Path to the TXT file.
+
+        Returns:
+            Full file content as a string.
+        """
+        try:
+            return txt_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            try:
+                return txt_path.read_text(encoding="latin-1")
+            except Exception as e:
+                logger.error("Failed to read TXT %s: %s", txt_path.name, e)
+                return ""

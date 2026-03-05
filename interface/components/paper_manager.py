@@ -3,17 +3,20 @@ Paper Manager Component
 =======================
 
 Streamlit UI component for uploading and managing research papers.
-Handles PDF upload, validation, listing, and deletion.
+
+Features:
+    • Upload PDF and TXT files
+    • Display papers with auto-generated sequential IDs (P1, P2, ...)
+    • Show paper ID → filename mapping
+    • Delete individual papers or all at once
 """
 
-import os
-import shutil
 import streamlit as st
 from pathlib import Path
 from typing import List
 
-from config.settings import PAPERS_DIR, MAX_UPLOAD_SIZE_MB
-from utils.helpers import format_file_size, get_paper_id
+from config.settings import PAPERS_DIR, MAX_UPLOAD_SIZE_MB, SUPPORTED_PAPER_EXTENSIONS
+from utils.helpers import format_file_size, list_paper_files, generate_paper_id_map
 from interface.design import section_header, sub_header, icon
 
 
@@ -23,9 +26,14 @@ def render_paper_manager():
 
     # ── Upload Section ───────────────────────────────────────────────
     st.markdown(sub_header("cloud_upload", "Upload Papers"), unsafe_allow_html=True)
+
+    # Build the accepted types list from settings (removes the dot prefix)
+    accepted_types = [ext.lstrip(".") for ext in SUPPORTED_PAPER_EXTENSIONS]
+    type_label = ", ".join(ext.upper() for ext in accepted_types)
+
     uploaded_files = st.file_uploader(
-        "Upload PDF research papers",
-        type=["pdf"],
+        f"Upload research papers ({type_label})",
+        type=accepted_types,
         accept_multiple_files=True,
         help=f"Maximum {MAX_UPLOAD_SIZE_MB} MB per file. Select multiple files at once.",
         key="paper_uploader",
@@ -38,11 +46,16 @@ def render_paper_manager():
 
     # ── Paper Library ────────────────────────────────────────────────
     st.markdown(sub_header("layers", "Paper Library"), unsafe_allow_html=True)
-    papers = _list_papers()
+    papers = list_paper_files(PAPERS_DIR)
 
     if not papers:
-        st.info("No papers uploaded yet. Upload PDF files above to get started.")
+        st.info("No papers uploaded yet. Upload PDF or TXT files above to get started.")
         return
+
+    # Build paper ID mapping (P1, P2, ...)
+    id_map = generate_paper_id_map(PAPERS_DIR)
+    # Reverse lookup: filename → paper_id
+    filename_to_id = {fpath.name: pid for pid, fpath in id_map.items()}
 
     # Summary stats
     total_size = sum(p.stat().st_size for p in papers)
@@ -50,10 +63,11 @@ def render_paper_manager():
     col1.metric("Total Papers", len(papers))
     col2.metric("Total Size", format_file_size(total_size))
 
-    # Paper list with delete option
+    # Paper list with P-ID, filename, size, and delete
     st.write("")
     for paper_path in papers:
-        _render_paper_row(paper_path)
+        paper_id = filename_to_id.get(paper_path.name, "?")
+        _render_paper_row(paper_path, paper_id)
 
     # Bulk actions
     st.divider()
@@ -77,7 +91,7 @@ def render_paper_manager():
 
 
 def _handle_uploads(uploaded_files) -> None:
-    """Process uploaded PDF files and save to papers directory."""
+    """Process uploaded files and save to papers directory."""
     saved_count = 0
     skipped_count = 0
 
@@ -98,37 +112,39 @@ def _handle_uploads(uploaded_files) -> None:
         st.info(f"Skipped {skipped_count} paper(s) — already exist.")
 
 
-def _list_papers() -> List[Path]:
-    """Return sorted list of PDF files in papers directory."""
-    return sorted(PAPERS_DIR.glob("*.pdf"))
-
-
-def _render_paper_row(paper_path: Path) -> None:
-    """Render a single paper row with metadata and delete button."""
-    paper_id = get_paper_id(paper_path.name)
+def _render_paper_row(paper_path: Path, paper_id: str) -> None:
+    """Render a single paper row with P-ID, filename, size, and delete button."""
     file_size = format_file_size(paper_path.stat().st_size)
+    ext_icon = "picture_as_pdf" if paper_path.suffix.lower() == ".pdf" else "article"
 
-    col1, col2, col3 = st.columns([5, 2, 1])
+    col1, col2, col3, col4 = st.columns([1, 5, 2, 1])
     with col1:
+        # Show paper ID badge
         st.markdown(
-            f'{icon("file_present", size=16, color="#3B82B0")} {paper_path.name}',
+            f'<span style="background:#1B2A4A;color:#fff;padding:2px 8px;'
+            f'border-radius:4px;font-weight:600;font-size:0.85rem">{paper_id}</span>',
             unsafe_allow_html=True,
         )
     with col2:
-        st.text(file_size)
+        st.markdown(
+            f'{icon(ext_icon, size=16, color="#3B82B0")} {paper_path.name}',
+            unsafe_allow_html=True,
+        )
     with col3:
-        if st.button("Delete", key=f"del_{paper_id}", help=f"Delete {paper_path.name}"):
+        st.text(file_size)
+    with col4:
+        if st.button("Delete", key=f"del_{paper_path.name}", help=f"Delete {paper_path.name}"):
             paper_path.unlink()
             st.rerun()
 
 
 def _delete_all_papers() -> None:
-    """Delete all PDF files from papers directory."""
-    for pdf_file in PAPERS_DIR.glob("*.pdf"):
-        pdf_file.unlink()
+    """Delete all paper files from papers directory."""
+    for paper_file in list_paper_files(PAPERS_DIR):
+        paper_file.unlink()
     st.success("All papers deleted.")
 
 
 def get_paper_count() -> int:
     """Return the number of uploaded papers."""
-    return len(list(PAPERS_DIR.glob("*.pdf")))
+    return len(list_paper_files(PAPERS_DIR))

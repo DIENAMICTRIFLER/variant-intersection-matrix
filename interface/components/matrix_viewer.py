@@ -3,22 +3,26 @@ Matrix Viewer Component
 =======================
 
 Interactive Streamlit component for viewing:
-    • Paper × Variant binary matrix (heatmap)
-    • Variant × Variant intersection matrix (heatmap)
-    • Cell drill-down: click a cell to see which papers support that combination
-    • Research gap highlighting
+    • Paper × Variant binary matrix (heatmap) with P-IDs
+    • Variant × Variant intersection matrix (heatmap) with dimension exclusion
+    • Cell drill-down: click a pair to see supporting papers
+    • Research gap highlighting (cross-dimension only)
     • Manual validation/override of detections
+
+Same-dimension cells:
+    The intersection heatmap shows excluded (same-dimension) cells in a
+    distinct gray color.  These are not research gaps — they are
+    structurally invalid comparisons.
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
 from typing import List, Optional, Tuple
 
 from config.settings import HEATMAP_COLORSCALE, HEATMAP_ZERO_COLOR
-from core.matrix_computation import MatrixComputer
+from core.matrix_computation import MatrixComputer, EXCLUDED_PAIR_VALUE
 from interface.design import section_header, sub_header, icon, COLORS
 
 
@@ -33,6 +37,7 @@ def render_matrix_viewer():
     computer: MatrixComputer = st.session_state.matrix_computer
     paper_variant_df: pd.DataFrame = st.session_state.paper_variant_df
     intersection_df: pd.DataFrame = st.session_state.intersection_df
+    dimension_map = st.session_state.get("dimension_map", {})
 
     # ── Tabs ─────────────────────────────────────────────────────────
     tab_intersection, tab_paper_variant, tab_gaps, tab_validation = st.tabs([
@@ -43,13 +48,13 @@ def render_matrix_viewer():
     ])
 
     with tab_intersection:
-        _render_intersection_matrix(intersection_df, computer)
+        _render_intersection_matrix(intersection_df, computer, dimension_map)
 
     with tab_paper_variant:
         _render_paper_variant_matrix(paper_variant_df)
 
     with tab_gaps:
-        _render_research_gaps(computer)
+        _render_research_gaps(computer, dimension_map)
 
     with tab_validation:
         _render_manual_validation(paper_variant_df, computer)
@@ -59,17 +64,25 @@ def render_matrix_viewer():
 # Intersection Matrix
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _render_intersection_matrix(intersection_df: pd.DataFrame, computer: MatrixComputer):
+def _render_intersection_matrix(
+    intersection_df: pd.DataFrame,
+    computer: MatrixComputer,
+    dimension_map: dict,
+):
     """Render the Variant × Variant intersection matrix as an interactive heatmap."""
-    st.markdown(sub_header("link", "Variant × Variant Intersection Matrix"), unsafe_allow_html=True)
+    st.markdown(
+        sub_header("link", "Variant × Variant Intersection Matrix"),
+        unsafe_allow_html=True,
+    )
     st.caption(
         "Each cell shows how many papers discuss **both** variants. "
         "Diagonal = total papers for that variant. "
+        "Gray cells = same-dimension pairs (excluded). "
         "Select a pair below to see supporting papers."
     )
 
     # Create heatmap
-    fig = _create_intersection_heatmap(intersection_df)
+    fig = _create_intersection_heatmap(intersection_df, dimension_map)
     st.plotly_chart(fig, use_container_width=True, key="intersection_heatmap")
 
     # ── Cell Drill-Down ──────────────────────────────────────────────
@@ -85,13 +98,23 @@ def _render_intersection_matrix(intersection_df: pd.DataFrame, computer: MatrixC
         vb = st.selectbox("Variant B", variant_names, key="drilldown_vb")
 
     if va and vb:
+        # Show dimension info
+        dim_a = dimension_map.get(va, "—")
+        dim_b = dimension_map.get(vb, "—")
+        st.caption(f"**{va}** [{dim_a}]  ×  **{vb}** [{dim_b}]")
+
         if va == vb:
             papers = computer.get_papers_for_variant(va)
-            count = len(papers)
-            st.info(f"**{va}** appears in **{count}** paper(s).")
+            st.info(f"**{va}** appears in **{len(papers)}** paper(s).")
+        elif computer.is_same_dimension_pair(va, vb):
+            st.warning(
+                f"**Excluded pair:** {va} and {vb} belong to the same "
+                f"dimension (**{dim_a}**) and cannot be meaningfully paired."
+            )
+            papers = []
         else:
             papers = computer.get_papers_for_pair(va, vb)
-            count = intersection_df.loc[va, vb]
+            count = int(intersection_df.loc[va, vb])
             if count > 0:
                 st.success(
                     f"**{count}** paper(s) discuss both **{va}** and **{vb}**:"
@@ -102,29 +125,56 @@ def _render_intersection_matrix(intersection_df: pd.DataFrame, computer: MatrixC
                 )
 
         if papers:
+            id_map = st.session_state.get("paper_id_map", {})
             for paper_id in papers:
-                st.markdown(f"- `{paper_id}`")
+                fname = id_map.get(paper_id, "")
+                display = f"- **{paper_id}** → {fname}" if fname else f"- `{paper_id}`"
+                st.markdown(display)
 
 
-def _create_intersection_heatmap(df: pd.DataFrame) -> go.Figure:
+def _create_intersection_heatmap(
+    df: pd.DataFrame,
+    dimension_map: dict,
+) -> go.Figure:
     """Create a Plotly heatmap for the intersection matrix."""
     labels = list(df.columns)
-    values = df.values
+    raw_values = df.values.copy().astype(float)
+
+    # Replace excluded cells (-1) with NaN for Plotly rendering
+    display_values = raw_values.copy()
+    display_values[display_values == EXCLUDED_PAIR_VALUE] = np.nan
 
     # Custom hover text
     hover_text = []
     for i, row_label in enumerate(labels):
         row_texts = []
         for j, col_label in enumerate(labels):
-            val = int(values[i][j])
+            val = raw_values[i][j]
             if i == j:
-                row_texts.append(f"{row_label}: {val} papers total")
+                row_texts.append(f"{row_label}: {int(val)} papers total")
+            elif val == EXCLUDED_PAIR_VALUE:
+                dim = dimension_map.get(row_label, "?")
+                row_texts.append(
+                    f"{row_label} × {col_label}: EXCLUDED (same dimension: {dim})"
+                )
             else:
-                row_texts.append(f"{row_label} ∩ {col_label}: {val} papers")
+                row_texts.append(f"{row_label} ∩ {col_label}: {int(val)} papers")
         hover_text.append(row_texts)
 
+    # Text annotations: show numbers or "×" for excluded
+    text_anno = []
+    for i in range(len(labels)):
+        row = []
+        for j in range(len(labels)):
+            val = raw_values[i][j]
+            if val == EXCLUDED_PAIR_VALUE:
+                row.append("×")
+            else:
+                row.append(str(int(val)))
+        text_anno.append(row)
+
     fig = go.Figure(data=go.Heatmap(
-        z=values,
+        z=display_values,
         x=labels,
         y=labels,
         hovertext=hover_text,
@@ -132,7 +182,7 @@ def _create_intersection_heatmap(df: pd.DataFrame) -> go.Figure:
         colorscale=HEATMAP_COLORSCALE,
         showscale=True,
         colorbar=dict(title="Count"),
-        text=values.astype(int).astype(str),
+        text=text_anno,
         texttemplate="%{text}",
         textfont=dict(size=9, color=COLORS["text"]),
     ))
@@ -163,8 +213,14 @@ def _create_intersection_heatmap(df: pd.DataFrame) -> go.Figure:
 
 def _render_paper_variant_matrix(df: pd.DataFrame):
     """Render the Paper × Variant binary matrix."""
-    st.markdown(sub_header("table_chart", "Paper × Variant Binary Matrix"), unsafe_allow_html=True)
-    st.caption("1 = variant detected in paper, 0 = not detected.")
+    st.markdown(
+        sub_header("table_chart", "Paper × Variant Binary Matrix"),
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "1 = variant detected in paper, 0 = not detected. "
+        "Paper rows use sequential IDs (P1, P2, ...)."
+    )
 
     # Stats per variant (column sums)
     variant_counts = df.sum(axis=0).sort_values(ascending=False)
@@ -172,7 +228,6 @@ def _render_paper_variant_matrix(df: pd.DataFrame):
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        # Show as interactive heatmap
         fig = go.Figure(data=go.Heatmap(
             z=df.values,
             x=list(df.columns),
@@ -198,6 +253,13 @@ def _render_paper_variant_matrix(df: pd.DataFrame):
             pct = count / len(df) * 100 if len(df) > 0 else 0
             st.progress(pct / 100, text=f"{variant_name}: {int(count)} ({pct:.0f}%)")
 
+    # Paper ID mapping
+    id_map = st.session_state.get("paper_id_map", {})
+    if id_map:
+        with st.expander("Paper ID Reference"):
+            for pid, fname in sorted(id_map.items(), key=lambda x: int(x[0][1:])):
+                st.markdown(f"**{pid}** → {fname}")
+
     # Expandable raw data table
     with st.expander("View Raw Data Table"):
         st.dataframe(df, use_container_width=True, height=400)
@@ -207,18 +269,18 @@ def _render_paper_variant_matrix(df: pd.DataFrame):
 # Research Gaps
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _render_research_gaps(computer: MatrixComputer):
+def _render_research_gaps(computer: MatrixComputer, dimension_map: dict):
     """Show variant pairs with zero intersection (research gaps)."""
     st.markdown(sub_header("psychology", "Research Gaps"), unsafe_allow_html=True)
     st.caption(
-        "These variant pairs have **no** papers that discuss both variants. "
-        "They represent potential research opportunities."
+        "These **cross-dimension** variant pairs have no papers that discuss "
+        "both variants. Same-dimension pairs are excluded by design."
     )
 
     gaps = computer.get_research_gaps()
 
     if not gaps:
-        st.success("No research gaps found — all variant pairs are covered!")
+        st.success("No research gaps found — all cross-dimension variant pairs are covered!")
         return
 
     st.metric("Total Research Gaps", len(gaps))
@@ -240,8 +302,16 @@ def _render_research_gaps(computer: MatrixComputer):
 
     st.write(f"Showing {len(filtered_gaps)} gap(s)")
 
-    # Display as a dataframe
-    gap_df = pd.DataFrame(filtered_gaps, columns=["Variant A", "Variant B"])
+    # Display as a dataframe with dimension info
+    gap_rows = []
+    for a, b in filtered_gaps:
+        gap_rows.append({
+            "Dimension A": dimension_map.get(a, "—"),
+            "Variant A": a,
+            "Dimension B": dimension_map.get(b, "—"),
+            "Variant B": b,
+        })
+    gap_df = pd.DataFrame(gap_rows)
     gap_df.index = range(1, len(gap_df) + 1)
     gap_df.index.name = "#"
     st.dataframe(gap_df, use_container_width=True, height=400)
@@ -271,9 +341,14 @@ def _render_manual_validation(df: pd.DataFrame, computer: MatrixComputer):
     paper_ids = list(df.index)
     variant_names = list(df.columns)
 
+    # Show filename reference for the selected paper
+    id_map = st.session_state.get("paper_id_map", {})
+
     col1, col2 = st.columns(2)
     with col1:
         selected_paper = st.selectbox("Select Paper", paper_ids, key="val_paper")
+        if selected_paper and selected_paper in id_map:
+            st.caption(f"File: {id_map[selected_paper]}")
     with col2:
         selected_variant = st.selectbox("Select Variant", variant_names, key="val_variant")
 

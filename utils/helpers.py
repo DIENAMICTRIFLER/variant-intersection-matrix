@@ -1,15 +1,30 @@
 """
 Shared utility functions used across the system.
 
-Provides JSON I/O, filename sanitization, and formatting helpers.
+Provides:
+    • JSON I/O
+    • Filename sanitization
+    • File hashing for change detection / caching
+    • Paper ID generation (P1, P2, P3, ...)
+    • Multi-format variant import (CSV, JSON, Excel)
+
+All functions are stateless and side-effect-free (except I/O).
 """
 
+import csv
+import io
 import json
 import re
 import hashlib
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
+from config.settings import PAPER_ID_PREFIX, SUPPORTED_PAPER_EXTENSIONS
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# JSON I/O
+# ═══════════════════════════════════════════════════════════════════════════
 
 def load_json(filepath: Path) -> Any:
     """
@@ -47,14 +62,62 @@ def save_json(data: Any, filepath: Path, indent: int = 2) -> None:
         json.dump(data, f, indent=indent, ensure_ascii=False)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Paper ID Generation
+# ═══════════════════════════════════════════════════════════════════════════
+
+def list_paper_files(papers_dir: Path) -> List[Path]:
+    """
+    Return a sorted list of all supported paper files in the directory.
+
+    Supports: .pdf, .txt (configurable via SUPPORTED_PAPER_EXTENSIONS).
+
+    Files are sorted alphabetically so that P-IDs are deterministic
+    and stable across runs (as long as no files are added/removed).
+
+    Args:
+        papers_dir: Path to the papers directory.
+
+    Returns:
+        Sorted list of Path objects.
+    """
+    files = []
+    for ext in SUPPORTED_PAPER_EXTENSIONS:
+        files.extend(papers_dir.glob(f"*{ext}"))
+    return sorted(files, key=lambda p: p.name.lower())
+
+
+def generate_paper_id_map(papers_dir: Path) -> Dict[str, Path]:
+    """
+    Assign sequential paper IDs (P1, P2, ...) to each file.
+
+    The mapping is deterministic: files are sorted alphabetically,
+    then assigned IDs in order.  This means the same set of files
+    always produces the same mapping.
+
+    Args:
+        papers_dir: Path to the papers directory.
+
+    Returns:
+        OrderedDict mapping paper_id (e.g. "P1") → file Path.
+    """
+    files = list_paper_files(papers_dir)
+    return {
+        f"{PAPER_ID_PREFIX}{i + 1}": fpath
+        for i, fpath in enumerate(files)
+    }
+
+
 def get_paper_id(filename: str) -> str:
     """
     Generate a stable, unique identifier for a paper based on its filename.
 
     Uses the filename stem (without extension) — simple and deterministic.
+    This is a LEGACY helper kept for cache key compatibility.  New code
+    should use generate_paper_id_map() for P1/P2/P3 IDs.
 
     Args:
-        filename: Original filename of the PDF.
+        filename: Original filename of the paper.
 
     Returns:
         Sanitized identifier string.
@@ -62,6 +125,10 @@ def get_paper_id(filename: str) -> str:
     stem = Path(filename).stem
     return safe_filename(stem)
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Filename / String Utilities
+# ═══════════════════════════════════════════════════════════════════════════
 
 def safe_filename(name: str) -> str:
     """
@@ -118,3 +185,248 @@ def compute_file_hash(filepath: Path, algorithm: str = "md5") -> str:
         for chunk in iter(lambda: f.read(8192), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Multi-Format Variant Import
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# All loaders convert external formats into the canonical internal structure:
+#
+#   {
+#     "Dimension Name": {
+#       "Variant Name": ["synonym1", "synonym2", ...]
+#     }
+#   }
+#
+# This dict-of-dicts is what the engine uses everywhere.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def parse_variants_from_csv(file_content: str) -> Dict[str, Dict[str, List[str]]]:
+    """
+    Parse dimension/variant/synonym definitions from CSV text.
+
+    Expected CSV columns: dimension, variant, synonym
+
+    Each row adds one synonym to a (dimension, variant) pair.
+    Multiple rows with the same dimension+variant accumulate synonyms.
+
+    Example CSV:
+        dimension,variant,synonym
+        Product Energy Consumption,Energy Consuming,energy consuming
+        Product Energy Consumption,Energy Consuming,electric powered
+        Product Requirement,Temporary,temporary use
+
+    Args:
+        file_content: Raw CSV text (decoded string).
+
+    Returns:
+        Canonical dimension dict.
+
+    Raises:
+        ValueError: If required columns are missing.
+    """
+    reader = csv.DictReader(io.StringIO(file_content))
+
+    # Normalize column names (strip whitespace, lowercase)
+    if reader.fieldnames is None:
+        raise ValueError("CSV file appears to be empty.")
+
+    # Create a mapping of lowercase fieldname → original fieldname
+    field_map = {f.strip().lower(): f for f in reader.fieldnames}
+
+    required = {"dimension", "variant", "synonym"}
+    if not required.issubset(field_map.keys()):
+        missing = required - set(field_map.keys())
+        raise ValueError(
+            f"CSV is missing required columns: {missing}. "
+            f"Expected: dimension, variant, synonym"
+        )
+
+    dimensions: Dict[str, Dict[str, List[str]]] = {}
+    for row in reader:
+        # Access using original field names mapped from lowercase
+        dim = row[field_map["dimension"]].strip()
+        var = row[field_map["variant"]].strip()
+        syn = row[field_map["synonym"]].strip()
+
+        if not dim or not var:
+            continue  # Skip rows with empty dimension or variant
+
+        if dim not in dimensions:
+            dimensions[dim] = {}
+        if var not in dimensions[dim]:
+            dimensions[dim][var] = []
+        if syn and syn not in dimensions[dim][var]:
+            dimensions[dim][var].append(syn)
+
+    return dimensions
+
+
+def parse_variants_from_excel(file_bytes: bytes) -> Dict[str, Dict[str, List[str]]]:
+    """
+    Parse dimension/variant/synonym definitions from an Excel file (.xlsx).
+
+    Same column expectations as CSV: dimension, variant, synonym.
+
+    Args:
+        file_bytes: Raw bytes of the uploaded Excel file.
+
+    Returns:
+        Canonical dimension dict.
+
+    Raises:
+        ValueError: If required columns are missing.
+        ImportError: If openpyxl is not installed.
+    """
+    import pandas as pd
+
+    df = pd.read_excel(io.BytesIO(file_bytes), engine="openpyxl")
+
+    # Normalize column names
+    df.columns = [c.strip().lower() for c in df.columns]
+
+    required = {"dimension", "variant", "synonym"}
+    if not required.issubset(set(df.columns)):
+        missing = required - set(df.columns)
+        raise ValueError(
+            f"Excel file is missing required columns: {missing}. "
+            f"Expected: dimension, variant, synonym"
+        )
+
+    dimensions: Dict[str, Dict[str, List[str]]] = {}
+    for _, row in df.iterrows():
+        dim = str(row["dimension"]).strip()
+        var = str(row["variant"]).strip()
+        syn = str(row["synonym"]).strip()
+
+        if not dim or not var or dim == "nan" or var == "nan":
+            continue
+
+        if dim not in dimensions:
+            dimensions[dim] = {}
+        if var not in dimensions[dim]:
+            dimensions[dim][var] = []
+        if syn and syn != "nan" and syn not in dimensions[dim][var]:
+            dimensions[dim][var].append(syn)
+
+    return dimensions
+
+
+def parse_variants_from_json(file_content: str) -> Dict[str, Dict[str, List[str]]]:
+    """
+    Parse dimension/variant/synonym definitions from a JSON string.
+
+    Accepts two formats:
+
+    Format A (new, dimension-aware):
+        {
+          "dimensions": {
+            "Dimension Name": {
+              "Variant Name": ["synonym1", "synonym2"]
+            }
+          }
+        }
+
+    Format B (legacy, flat list — auto-assigns "Uncategorized" dimension):
+        {
+          "variants": [
+            {"name": "Variant", "synonyms": ["syn1", "syn2"]}
+          ]
+        }
+
+    Args:
+        file_content: Raw JSON text (decoded string).
+
+    Returns:
+        Canonical dimension dict.
+
+    Raises:
+        ValueError: If the JSON structure is unrecognized.
+    """
+    data = json.loads(file_content)
+
+    # Format A: dimension-aware
+    if isinstance(data, dict) and "dimensions" in data:
+        return data["dimensions"]
+
+    # Format B: legacy flat list
+    if isinstance(data, dict) and "variants" in data:
+        legacy_list = data["variants"]
+        dimensions: Dict[str, Dict[str, List[str]]] = {}
+        for v in legacy_list:
+            dim = v.get("dimension", "Uncategorized")
+            name = v["name"]
+            syns = v.get("synonyms", [])
+            if dim not in dimensions:
+                dimensions[dim] = {}
+            dimensions[dim][name] = syns
+        return dimensions
+
+    # Format C: bare list
+    if isinstance(data, list):
+        dimensions = {}
+        for v in data:
+            dim = v.get("dimension", "Uncategorized")
+            name = v["name"]
+            syns = v.get("synonyms", [])
+            if dim not in dimensions:
+                dimensions[dim] = {}
+            dimensions[dim][name] = syns
+        return dimensions
+
+    raise ValueError(
+        "Unrecognized JSON format. Expected {'dimensions': {...}} or {'variants': [...]}."
+    )
+
+
+def dimensions_to_flat_list(
+    dimensions: Dict[str, Dict[str, List[str]]],
+) -> List[Dict[str, Any]]:
+    """
+    Convert the canonical dimension dict into a flat list for UI iteration.
+
+    Each item: {"dimension": str, "name": str, "synonyms": list[str]}
+
+    Useful for the VariantDetector which iterates over individual variants.
+
+    Args:
+        dimensions: Canonical dimension dict.
+
+    Returns:
+        Flat list of variant definitions, each tagged with its dimension.
+    """
+    flat = []
+    for dim_name, variants in dimensions.items():
+        for var_name, synonyms in variants.items():
+            flat.append({
+                "dimension": dim_name,
+                "name": var_name,
+                "synonyms": list(synonyms),
+            })
+    return flat
+
+
+def flat_list_to_dimensions(
+    flat_list: List[Dict[str, Any]],
+) -> Dict[str, Dict[str, List[str]]]:
+    """
+    Convert a flat variant list back into the canonical dimension dict.
+
+    Inverse of dimensions_to_flat_list().
+
+    Args:
+        flat_list: List of {"dimension": ..., "name": ..., "synonyms": [...]}.
+
+    Returns:
+        Canonical dimension dict.
+    """
+    dimensions: Dict[str, Dict[str, List[str]]] = {}
+    for v in flat_list:
+        dim = v.get("dimension", "Uncategorized")
+        name = v["name"]
+        syns = v.get("synonyms", [])
+        if dim not in dimensions:
+            dimensions[dim] = {}
+        dimensions[dim][name] = list(syns)
+    return dimensions

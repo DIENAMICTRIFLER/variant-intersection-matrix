@@ -3,13 +3,19 @@ Analysis Runner Component
 =========================
 
 Orchestrates the full analysis pipeline from the Streamlit UI:
-    1. Text extraction from PDFs
-    2. Text preprocessing
-    3. Variant detection
-    4. Matrix computation
+    1. Text extraction from PDFs and TXT files
+    2. Text preprocessing / normalization
+    3. Dimension-aware variant detection
+    4. Matrix computation (with same-dimension pair exclusion)
     5. CSV export
 
 Shows real-time progress bars and caches results in session state.
+
+Paper IDs:
+    Papers are assigned simple sequential IDs — P1, P2, P3, ... —
+    based on alphabetical ordering.  All outputs reference papers
+    by these IDs.  The ID → filename mapping is stored in session state
+    for reference.
 """
 
 import logging
@@ -21,6 +27,7 @@ from core.text_extraction import TextExtractor
 from core.preprocessing import TextPreprocessor
 from core.variant_detection import VariantDetector
 from core.matrix_computation import MatrixComputer
+from utils.helpers import list_paper_files
 from interface.design import section_header, sub_header, icon
 
 logger = logging.getLogger(__name__)
@@ -31,7 +38,7 @@ def render_analysis_runner():
     st.markdown(section_header("settings", "Run Analysis"), unsafe_allow_html=True)
 
     # Pre-check: are papers and variants ready?
-    papers = list(PAPERS_DIR.glob("*.pdf"))
+    papers = list_paper_files(PAPERS_DIR)
     variants = st.session_state.get("variants", [])
 
     col1, col2 = st.columns(2)
@@ -71,15 +78,15 @@ def _run_full_pipeline(variants):
 
     try:
         # ── Step 1: Text Extraction ──────────────────────────────────
-        status.write("**Step 1/4:** Extracting text from PDFs...")
-        progress_bar = st.progress(0, text="Extracting PDFs...")
+        status.write("**Step 1/4:** Extracting text from papers...")
+        progress_bar = st.progress(0, text="Extracting papers...")
 
         extractor = TextExtractor()
 
         def extraction_progress(current, total):
             progress_bar.progress(
                 current / total,
-                text=f"Extracting PDFs... ({current}/{total})",
+                text=f"Extracting papers... ({current}/{total})",
             )
 
         raw_texts = extractor.extract_all(progress_callback=extraction_progress)
@@ -90,10 +97,14 @@ def _run_full_pipeline(variants):
             status.update(label="Analysis failed", state="error")
             return
 
-        status.write(f"  → Extracted text from {len(raw_texts)} papers")
+        # Store the P-ID → filename mapping for reference
+        id_to_filename = extractor.get_id_to_filename_map()
+        st.session_state.paper_id_map = id_to_filename
+
+        status.write(f"  → Extracted text from {len(raw_texts)} papers (P1–P{len(raw_texts)})")
 
         # ── Step 2: Preprocessing ────────────────────────────────────
-        status.write("**Step 2/4:** Preprocessing texts...")
+        status.write("**Step 2/4:** Normalizing text...")
         preprocessor = TextPreprocessor()
         preprocessed = preprocessor.preprocess_all(raw_texts)
         status.write(f"  → Preprocessed {len(preprocessed)} documents")
@@ -115,17 +126,32 @@ def _run_full_pipeline(variants):
             progress_callback=detection_progress,
         )
         progress_bar2.progress(1.0, text="Detection complete")
-        status.write(f"  → Scanned {len(detection_results)} papers × {len(variants)} variants")
+        status.write(
+            f"  → Scanned {len(detection_results)} papers × {len(variants)} variants"
+        )
 
         # ── Step 4: Matrix Computation ───────────────────────────────
         status.write("**Step 4/4:** Computing matrices...")
         computer = MatrixComputer()
         variant_names = detector.get_variant_names()
+        dimension_map = detector.get_dimension_map()
 
+        # Build paper × variant matrix
         paper_variant_df = computer.build_paper_variant_matrix(
             detection_results, variant_names
         )
-        intersection_df = computer.compute_intersection_matrix()
+        # Compute intersection matrix with dimension exclusion
+        intersection_df = computer.compute_intersection_matrix(
+            dimension_map=dimension_map,
+        )
+
+        # Count excluded pairs
+        stats = computer.get_summary_stats()
+        excluded = stats.get("excluded_pairs", 0)
+        if excluded > 0:
+            status.write(
+                f"  → Skipped {excluded} same-dimension pair(s) in intersection matrix"
+            )
 
         # Export CSVs
         computer.export_all()
@@ -138,6 +164,7 @@ def _run_full_pipeline(variants):
         st.session_state.detection_results = detection_results
         st.session_state.preprocessed_texts = preprocessed
         st.session_state.variant_detector = detector
+        st.session_state.dimension_map = dimension_map
         st.session_state.analysis_complete = True
 
         status.update(label="Analysis complete!", state="complete")
@@ -165,8 +192,15 @@ def _show_results_summary():
     col5, col6, col7, col8 = st.columns(4)
     col5.metric("Avg Variants/Paper", f"{stats.get('avg_variants_per_paper', 0):.1f}")
     col6.metric("Avg Papers/Variant", f"{stats.get('avg_papers_per_variant', 0):.1f}")
-    col7.metric("Total Pairs", stats.get("total_pairs", 0))
-    col8.metric("Covered Pairs", stats.get("covered_pairs", 0))
+    col7.metric("Valid Pairs", stats.get("total_valid_pairs", 0))
+    col8.metric("Excluded Pairs", stats.get("excluded_pairs", 0))
+
+    # Paper ID mapping
+    if "paper_id_map" in st.session_state:
+        with st.expander("Paper ID Reference (P-ID → Filename)"):
+            id_map = st.session_state.paper_id_map
+            for pid, fname in sorted(id_map.items(), key=lambda x: int(x[0][1:])):
+                st.markdown(f"**{pid}** → {fname}")
 
     # Download buttons for output files
     st.divider()

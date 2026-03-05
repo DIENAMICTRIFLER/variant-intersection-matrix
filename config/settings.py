@@ -3,6 +3,11 @@ Centralized configuration for the Variant Intersection Matrix system.
 
 All paths, thresholds, and tunables are defined here so that no module
 contains hard-coded magic values.
+
+Architecture note:
+    Every module imports from this file rather than defining its own paths
+    or constants.  This makes it trivial to change directory layouts,
+    tweak detection thresholds, or switch color schemes — all in one place.
 """
 
 import os
@@ -23,6 +28,14 @@ for _dir in (PAPERS_DIR, VARIANTS_DIR, OUTPUT_DIR, CACHE_DIR):
     _dir.mkdir(parents=True, exist_ok=True)
 
 # ─── Variant Definitions File ───────────────────────────────────────────────
+# Now uses dimension-aware format:
+#   {
+#     "dimensions": {
+#       "Dimension Name": {
+#         "Variant Name": ["synonym1", "synonym2", ...]
+#       }
+#     }
+#   }
 VARIANTS_FILE = VARIANTS_DIR / "variants.json"
 
 # ─── Output Filenames ───────────────────────────────────────────────────────
@@ -31,11 +44,18 @@ VARIANT_INTERSECTION_MATRIX_CSV = "variant_intersection_matrix.csv"
 PAIR_DETAILS_CSV = "pair_details.csv"
 MANUAL_OVERRIDES_FILE = CACHE_DIR / "manual_overrides.json"
 
+# ─── Paper Configuration ────────────────────────────────────────────────────
+# Supported file types for research papers
+SUPPORTED_PAPER_EXTENSIONS = [".pdf", ".txt"]
+
+# Prefix for auto-generated paper IDs (P1, P2, P3, ...)
+PAPER_ID_PREFIX = "P"
+
 # ─── Processing Configuration ───────────────────────────────────────────────
-# Batch size for PDF processing (number of papers per batch)
+# Batch size for paper processing (number of papers per batch)
 PDF_BATCH_SIZE = 25
 
-# Maximum number of pages to extract per paper (None = all pages)
+# Maximum number of pages to extract per PDF paper (None = all pages)
 MAX_PAGES_PER_PAPER = None
 
 # ─── Text Preprocessing ─────────────────────────────────────────────────────

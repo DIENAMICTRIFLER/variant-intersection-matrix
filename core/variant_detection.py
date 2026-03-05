@@ -6,12 +6,27 @@ Detects the presence of predefined variants (and their synonyms) in
 preprocessed paper texts.
 
 Strategy:
-    • Pre-compile a mapping of variant → set of normalized search terms
-      (the variant name itself + all synonyms).
-    • For each paper text, check each term using substring matching.
-    • A variant is "present" if any of its terms appears in the text
-      at least `presence_threshold` times.
-    • Return a binary presence dict per paper.
+    • Variants are organized by dimension:
+        {
+          "Product Energy Consumption": {
+            "Energy Consuming": ["energy consuming", "energy-intensive"],
+            "Non Energy Consuming": ["manual product", "non powered"]
+          }
+        }
+
+    • Pre-compile a search index: variant → list of normalized search terms
+      (the variant name itself + all synonyms).  Normalization uses the
+      same TextPreprocessor.preprocess_variant_term() as paper text.
+
+    • For each paper text, check each term via substring matching.
+      A variant is "present" if any of its terms appears at least
+      `presence_threshold` times.
+
+    • Return a binary presence dict per paper:
+      {paper_id: {variant_name: True/False}}
+
+Dimension metadata is preserved so the matrix computation module
+can skip same-dimension pairs when building the VIM.
 """
 
 import logging
@@ -20,7 +35,12 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from config.settings import PRESENCE_THRESHOLD, CASE_INSENSITIVE, VARIANTS_FILE
 from core.preprocessing import TextPreprocessor
-from utils.helpers import load_json, save_json
+from utils.helpers import (
+    load_json,
+    save_json,
+    dimensions_to_flat_list,
+    flat_list_to_dimensions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +49,13 @@ class VariantDetector:
     """
     Detects variant presence across a corpus of preprocessed texts.
 
+    Supports the new dimension-aware variant structure while remaining
+    backwards-compatible with legacy flat lists.
+
     Attributes:
-        variants:  Ordered list of variant definitions.
+        variants:     Flat list of variant dicts, each with "dimension", "name", "synonyms".
         preprocessor: TextPreprocessor for normalizing variant terms.
-        threshold: Minimum occurrences to consider a variant "present".
+        threshold:    Minimum occurrences to consider a variant "present".
     """
 
     def __init__(
@@ -44,13 +67,13 @@ class VariantDetector:
         self.preprocessor = preprocessor or TextPreprocessor()
         self.threshold = threshold
 
-        # Load from file if not provided
+        # Load variants (flat list with dimension info)
         if variants is not None:
-            self.variants = variants
+            self.variants = self._ensure_dimension_fields(variants)
         else:
             self.variants = self._load_variants()
 
-        # Build search index: variant_name → list of preprocessed terms
+        # Build search index: variant_name → list of preprocessed search terms
         self._search_index: Dict[str, List[str]] = {}
         self._build_search_index()
 
@@ -89,6 +112,10 @@ class VariantDetector:
         """
         Check which variants are present in a single preprocessed text.
 
+        Uses phrase-based substring matching on normalized text.
+        The match is deterministic and consistent because both
+        paper text and synonym terms pass through the same normalization.
+
         Args:
             text: Preprocessed text of a paper.
 
@@ -105,6 +132,18 @@ class VariantDetector:
         """Return ordered list of variant names."""
         return [v["name"] for v in self.variants]
 
+    def get_dimension_map(self) -> Dict[str, str]:
+        """
+        Return a mapping of variant_name → dimension_name.
+
+        This is used by MatrixComputer to know which variants belong
+        to the same dimension (and thus should NOT be paired in the VIM).
+
+        Returns:
+            Dict mapping each variant name to its parent dimension.
+        """
+        return {v["name"]: v.get("dimension", "Uncategorized") for v in self.variants}
+
     def get_variant_details(self, variant_name: str) -> Optional[Dict[str, Any]]:
         """Return full definition for a named variant."""
         for v in self.variants:
@@ -114,7 +153,7 @@ class VariantDetector:
 
     def count_occurrences(self, text: str, variant_name: str) -> int:
         """
-        Count total occurrences of a variant (all terms) in text.
+        Count total occurrences of a variant (all synonym terms) in text.
 
         Useful for the UI to show how strongly a variant is represented.
         """
@@ -122,7 +161,6 @@ class VariantDetector:
         count = 0
         for term in terms:
             if term:
-                # Use regex with word boundaries for more accurate counting
                 pattern = re.compile(re.escape(term))
                 count += len(pattern.findall(text))
         return count
@@ -130,7 +168,7 @@ class VariantDetector:
     def reload_variants(self, variants: Optional[List[Dict[str, Any]]] = None):
         """Reload variant definitions and rebuild search index."""
         if variants is not None:
-            self.variants = variants
+            self.variants = self._ensure_dimension_fields(variants)
         else:
             self.variants = self._load_variants()
         self._build_search_index()
@@ -138,10 +176,27 @@ class VariantDetector:
 
     # ── Internal Methods ─────────────────────────────────────────────────
 
+    def _ensure_dimension_fields(
+        self, variants: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Ensure every variant dict has a 'dimension' field.
+
+        Legacy data may not include dimensions — assign "Uncategorized".
+        """
+        for v in variants:
+            if "dimension" not in v:
+                v["dimension"] = "Uncategorized"
+        return variants
+
     def _build_search_index(self):
         """
         Build the search index: for each variant, compile the list of
-        preprocessed search terms (variant name + synonyms).
+        preprocessed search terms (variant name + all synonyms).
+
+        Both the variant name and each synonym are normalized with
+        preprocess_variant_term() to match the normalization applied
+        to the paper text.
         """
         self._search_index.clear()
         for variant in self.variants:
@@ -169,7 +224,8 @@ class VariantDetector:
         Check if any term from the list appears in the text at least
         `threshold` times.
 
-        Uses simple substring search (fast for moderate-length texts).
+        Uses simple substring search — fast and sufficient for
+        moderate-length texts (research paper scale).
         """
         total_count = 0
         for term in terms:
@@ -183,18 +239,46 @@ class VariantDetector:
         return total_count >= self.threshold
 
     def _load_variants(self) -> List[Dict[str, Any]]:
-        """Load variant definitions from the JSON file."""
+        """
+        Load variant definitions from the JSON file.
+
+        Handles both the new dimension-aware format:
+            {"dimensions": {"DimName": {"VarName": ["syn1", ...]}}}
+
+        And the legacy flat format:
+            {"variants": [{"name": "...", "synonyms": [...]}]}
+        """
         try:
             data = load_json(VARIANTS_FILE)
+
+            # New dimension-aware format
+            if isinstance(data, dict) and "dimensions" in data:
+                return dimensions_to_flat_list(data["dimensions"])
+
+            # Legacy flat format
+            if isinstance(data, dict) and "variants" in data:
+                variants = data["variants"]
+                return self._ensure_dimension_fields(variants)
+
             if isinstance(data, list):
-                return data
-            return data.get("variants", [])
+                return self._ensure_dimension_fields(data)
+
+            return []
         except FileNotFoundError:
             logger.info("No variants file found at %s — starting empty", VARIANTS_FILE)
             return []
 
     @staticmethod
-    def save_variants(variants: List[Dict[str, Any]], filepath=VARIANTS_FILE):
-        """Save variant definitions to the JSON file."""
-        save_json({"variants": variants}, filepath)
+    def save_variants(
+        variants: List[Dict[str, Any]],
+        filepath=VARIANTS_FILE,
+    ):
+        """
+        Save variant definitions using the new dimension-aware format.
+
+        Converts the flat list to the canonical dimension dict:
+            {"dimensions": {"DimName": {"VarName": ["syn1", ...]}}}
+        """
+        dimensions = flat_list_to_dimensions(variants)
+        save_json({"dimensions": dimensions}, filepath)
         logger.info("Saved %d variant definitions to %s", len(variants), filepath)

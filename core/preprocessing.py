@@ -4,15 +4,21 @@ Text Preprocessing Module
 
 Normalizes and cleans extracted text to improve variant matching accuracy.
 
-Pipeline:
-    1. Lowercase conversion
-    2. Unicode normalization
-    3. Whitespace normalization
-    4. Optional punctuation removal
-    5. Optional stopword removal
-    6. Optional stemming
+Normalization Pipeline (applied to both paper text AND synonym terms):
+    1. Unicode normalization (NFKD — decomposes ligatures and accents)
+    2. Lowercase conversion
+    3. Replace hyphens / underscores with spaces
+    4. Remove all non-alphanumeric characters (except spaces)
+    5. Collapse multiple spaces into one and strip edges
+    6. (Optional) Stopword removal
 
-The preprocessed text is what the variant detector matches against.
+Why this matters:
+    Variant detection uses substring matching.  If the paper says
+    "Temporary-use." and the synonym is "temporary use", both must
+    be normalized identically ("temporary use") for the match to work.
+
+    The same `preprocess_variant_term()` method is used on synonyms
+    during search-index construction, guaranteeing identical normalization.
 """
 
 import logging
@@ -43,9 +49,15 @@ class TextPreprocessor:
     """
     Cleans and normalizes text for variant matching.
 
+    The same normalization is applied to:
+        1. Full paper texts   (via preprocess / preprocess_all)
+        2. Individual synonym terms (via preprocess_variant_term)
+
+    This ensures that matching is deterministic and consistent.
+
     Attributes:
-        min_word_length: Minimum word length to retain.
-        apply_stemming:  Whether to apply Porter stemming.
+        min_word_length:  Minimum word length to retain (stopword mode).
+        apply_stemming:   Whether to apply Porter stemming (currently unused).
         remove_stopwords: Whether to remove common stopwords.
     """
 
@@ -83,6 +95,19 @@ class TextPreprocessor:
         because variant names can be multi-word phrases — we need substring
         matching to work.
 
+        Steps:
+            1. NFKD unicode normalization
+            2. Lowercase
+            3. Hyphens/underscores → spaces
+            4. Remove non-alphanum (except spaces)
+            5. Collapse whitespace
+            6. (Optional) stopword removal
+
+        Examples:
+            "Temporary-use."       → "temporary use"
+            "Energy_Consuming!"    → "energy consuming"
+            "COVID-19 is a virus." → "covid 19 is a virus"
+
         Args:
             text: Raw extracted text.
 
@@ -92,14 +117,13 @@ class TextPreprocessor:
         if not text:
             return ""
 
-        # 1. Unicode normalization (NFKD decomposes ligatures, etc.)
+        # 1. Unicode normalization (NFKD decomposes ligatures)
         text = unicodedata.normalize("NFKD", text)
 
         # 2. Lowercase
         text = text.lower()
 
-        # 3. Replace hyphens and underscores with spaces (so "COVID-19"
-        #    becomes "covid 19" and matches both forms)
+        # 3. Replace hyphens and underscores with spaces
         text = re.sub(r"[-_]", " ", text)
 
         # 4. Remove non-alphanumeric characters except spaces
@@ -120,6 +144,10 @@ class TextPreprocessor:
         """
         Apply the same normalization to a variant name or synonym
         so that matching uses identical representations.
+
+        This is critical for correct matching:
+            synonym "energy-intensive" → "energy intensive"
+            paper text "...energy intensive..." → match!
 
         Args:
             term: Variant name or synonym string.
